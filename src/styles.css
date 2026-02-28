@@ -1,0 +1,4 @@
+html,body,#root{height:100%;}
+body{margin:0;background:#fafafa;color:#111}
+h1{font-size:18px;margin:0 0 12px}
+.notation-wrap{background:#fff;border:1px solid #e6e6e6;padding:12px;border-radius:6px}
