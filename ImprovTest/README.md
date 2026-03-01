@@ -1,5 +1,7 @@
 # ImprovTest (Audio Visualizer)
 
+This is a music app for composing short melodies with an accompaniment to brainstorm ideas and see how one might improvise over predetermined chord changes. This initial version is functional. There is a glitch where, if a song is composed, and then the key is changed and then the beats/measure reduced, it will crash and blank the screen. This is not a common scenario in music making contexts. 
+
 > **AI AGENTS: READ THIS FIRST**
 > Please check [AI_CONTEXT.md](./AI_CONTEXT.md) for critical project structure, constraints, and implementation details before making changes.
 

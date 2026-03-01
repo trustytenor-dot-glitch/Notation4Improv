@@ -104,6 +104,24 @@ function createGrid<T>(
     )
 }
 
+function getDurationFromTicks(t: number) {
+  if (t === 16) return '1n'
+  if (t === 15) return '1n' // Approx capture for truncation logic
+  if (t === 14) return '2n..' 
+  if (t === 12) return '2n.'
+  if (t === 11) return '2n.' // Approx
+  if (t === 10) return '2n' // Approx to half note? No, 10 is 4n + 4n + 8n
+  if (t === 8) return '2n'
+  if (t === 7) return '4n..'
+  if (t === 6) return '4n.'
+  if (t === 5) return '4n' // Approx
+  if (t === 4) return '4n'
+  if (t === 3) return '8n.'
+  if (t === 2) return '8n'
+  if (t === 1) return '16n'
+  return '16n' // Fallback
+}
+
 // --- Specific Factories using Generic ---
 const makeEmptyChords = (m: number, b: number) => createGrid(m, b, null, '') as string[][]
 const makeEmptyMelody = (m: number, b: number, s = 4) => createGrid(m, b, s, null) as (string | null)[][][]
@@ -114,6 +132,22 @@ export const makeEmptyRhythm = (m: number, b: number, s = 4): RhythmTrack => cre
     hihatOpen: false,
     cymbal: false
 })) as RhythmTrack
+
+function copyRhythmTrack(source: RhythmTrack, target: RhythmTrack, measures: number, beats: number, subdivisions: number) {
+  for (let i = 0; i < Math.min(measures, source.length); i++) {
+    if (!source[i]) continue
+    if (!target[i]) continue // Ensure target measure exists
+    for (let j = 0; j < Math.min(beats, source[i].length); j++) {
+      if (!source[i][j]) continue
+      if (!target[i][j]) continue // Ensure target beat exists
+      for (let k = 0; k < Math.min(subdivisions, source[i][j].length); k++) {
+        if (source[i][j][k]) {
+          target[i][j][k] = { ...source[i][j][k] }
+        }
+      }
+    }
+  }
+}
 
 const DEFAULT_MEASURES = 4
 const DEFAULT_BEATS = 4
@@ -253,17 +287,7 @@ export const useStore = create<Store>()(devtools((set, get) => ({
     // Resize Rhythm
     const newRhythm = makeEmptyRhythm(n, state.beatsPerMeasure, state.subdivisionsPerBeat || 4)
     if (state.rhythmTrack) {
-        for (let i = 0; i < Math.min(n, state.rhythmTrack.length); i++) {
-            if (!state.rhythmTrack[i]) continue;
-            for (let j = 0; j < Math.min(state.beatsPerMeasure, state.rhythmTrack[i].length); j++) {
-                if (!state.rhythmTrack[i][j]) continue;
-                for (let k = 0; k < Math.min(state.subdivisionsPerBeat || 4, state.rhythmTrack[i][j].length); k++) {
-                    if (state.rhythmTrack[i][j][k]) {
-                        newRhythm[i][j][k] = { ...state.rhythmTrack[i][j][k] }
-                    }
-                }
-            }
-        }
+        copyRhythmTrack(state.rhythmTrack, newRhythm, n, state.beatsPerMeasure, state.subdivisionsPerBeat || 4)
     }
 
     // Resize Melody
@@ -338,18 +362,7 @@ export const useStore = create<Store>()(devtools((set, get) => ({
     // Resize Rhythm
     const newRhythm = makeEmptyRhythm(state.measureCount, n, state.subdivisionsPerBeat || 4)
     if (state.rhythmTrack) {
-        for (let i = 0; i < Math.min(state.measureCount, state.rhythmTrack.length); i++) {
-            if (!state.rhythmTrack[i]) continue;
-            for (let j = 0; j < Math.min(n, state.rhythmTrack[i].length); j++) {
-                if (!state.rhythmTrack[i][j]) continue;
-                for(let k = 0; k < (state.subdivisionsPerBeat || 4); k++) {
-                    // Check bounds for source k. Use optional chaining just in case.
-                    if (state.rhythmTrack[i][j]?.[k]) {
-                        newRhythm[i][j][k] = { ...state.rhythmTrack[i][j][k] }
-                    }
-                }
-            }
-        }
+        copyRhythmTrack(state.rhythmTrack, newRhythm, state.measureCount, n, state.subdivisionsPerBeat || 4)
     }
 
     set({ beatsPerMeasure: n, chords: newChords, melody: newMelody, bass: newBass, rhythmTrack: newRhythm, undoStack: [...state.undoStack, before], redoStack: [] })
@@ -408,25 +421,6 @@ export const useStore = create<Store>()(devtools((set, get) => ({
 
       const subdivisions = state.subdivisionsPerBeat || 4
       const targetTick = b * subdivisions + s
-
-      // Helper for duration strings
-      const getDurationFromTicks = (t: number) => {
-           if (t === 16) return '1n'
-           if (t === 15) return '1n' // Approx capture for truncation logic
-           if (t === 14) return '2n..' 
-           if (t === 12) return '2n.'
-           if (t === 11) return '2n.' // Approx
-           if (t === 10) return '2n' // Approx to half note? No, 10 is 4n + 4n + 8n
-           if (t === 8) return '2n'
-           if (t === 7) return '4n..'
-           if (t === 6) return '4n.'
-           if (t === 5) return '4n' // Approx
-           if (t === 4) return '4n'
-           if (t === 3) return '8n.'
-           if (t === 2) return '8n'
-           if (t === 1) return '16n'
-           return '16n' // Fallback
-      }
 
       // --- TRUNCATE BACKWARD OVERLAPS ---
       // We must scan the WHOLE measure backwards because a Whole Note at 0,0 overlaps everything
@@ -516,25 +510,6 @@ export const useStore = create<Store>()(devtools((set, get) => ({
 
       const subdivisions = state.subdivisionsPerBeat || 4
       const targetTick = b * subdivisions + s
-
-      // Helper for duration strings (duplicate to avoid scope issues or refactor later)
-      const getDurationFromTicks = (t: number) => {
-           if (t === 16) return '1n'
-           if (t === 15) return '1n' 
-           if (t === 14) return '2n..' 
-           if (t === 12) return '2n.'
-           if (t === 11) return '2n.' 
-           if (t === 10) return '2n' 
-           if (t === 8) return '2n'
-           if (t === 7) return '4n..'
-           if (t === 6) return '4n.'
-           if (t === 5) return '4n' 
-           if (t === 4) return '4n'
-           if (t === 3) return '8n.'
-           if (t === 2) return '8n'
-           if (t === 1) return '16n'
-           return '16n' 
-      }
 
       // --- TRUNCATE BACKWARD OVERLAPS ---
       for (let t = targetTick - 1; t >= 0; t--) {
