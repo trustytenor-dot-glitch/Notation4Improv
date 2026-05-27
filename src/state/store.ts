@@ -74,6 +74,10 @@ type Store = Snapshot & {
   setBassVolume: (v: number) => void
   rhythmVolume: number
   setRhythmVolume: (v: number) => void
+  measuresPerSystem: number | 'auto'
+  setMeasuresPerSystem: (v: number | 'auto') => void
+  printTrackVisibility: { melody: boolean; bass: boolean; rhythm: boolean }
+  setPrintTrackVisibility: (track: 'melody' | 'bass' | 'rhythm', visible: boolean) => void
   reset: () => void
   revert: () => void
   undo: () => void
@@ -227,6 +231,12 @@ export const useStore = create<Store>()(devtools((set, get) => ({
   setBassVolume: (v) => set({ bassVolume: v }),
   rhythmVolume: -11,
   setRhythmVolume: (v) => set({ rhythmVolume: v }),
+  measuresPerSystem: 'auto' as number | 'auto',
+  setMeasuresPerSystem: (v) => set({ measuresPerSystem: v }),
+  printTrackVisibility: { melody: true, bass: true, rhythm: true },
+  setPrintTrackVisibility: (track, visible) => set(state => ({
+    printTrackVisibility: { ...state.printTrackVisibility, [track]: visible }
+  })),
   setRhythmTrack: (track) => {
     const before = getSnapshot(get())
     set(state => ({ undoStack: [...state.undoStack, before], redoStack: [], rhythmTrack: track }))

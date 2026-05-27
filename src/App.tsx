@@ -6,10 +6,10 @@ import useStore from './state/store'
 import Toolbar from './components/Toolbar'
 import Inspector from './components/Inspector'
 import AudioController from './components/AudioController'
+import PrintView from './components/PrintView'
 
 export default function App() {
   const [width, setWidth] = useState(window.innerWidth - 40)
-  const height = 480 // Increased height for multiple staves
 
   useEffect(() => {
     const handleResize = () => setWidth(window.innerWidth - 40)
@@ -93,20 +93,25 @@ export default function App() {
     setInstrumentPicker({ staff: 'treble', x: clientX, y: clientY })
   }
 
+  const [showPrintView, setShowPrintView] = useState(false)
+
   function handleBassClefClick(clientX: number, clientY: number) {
     setInstrumentPicker({ staff: 'bass', x: clientX, y: clientY })
   }
 
+  if (showPrintView) {
+    return <PrintView onClose={() => setShowPrintView(false)} />
+  }
+
   return (
-    <div style={{ padding: 20, fontFamily: 'sans-serif' }}>
+    <div className="app-shell" style={{ padding: 20, fontFamily: 'sans-serif' }}>
       <AudioController />
       <h1>ImprovTest (Beta)</h1>
-      <Toolbar />
+      <Toolbar onPrint={() => setShowPrintView(true)} />
       <Inspector />
       <div style={{ position: 'relative', width, marginTop: 20 }}>
         <StaffCanvas
           width={width}
-          height={height}
           measureCount={measureCount}
           beatsPerMeasure={beatsPerMeasure}
           subdivisionsPerBeat={subdivisionsPerBeat}

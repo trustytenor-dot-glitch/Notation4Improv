@@ -5,9 +5,10 @@ import AudioPlayer from '../lib/audio'
 import { TREBLE_SCALE, BASS_SCALE } from '../lib/constants'
 import { applyKeySignature, KEY_SIGNATURE_NOTES, getVexFlowDuration, getDurationTicks } from '../lib/musicHelpers'
 
+const MIN_MEASURE_WIDTH = 180
+
 type Props = {
   width?: number
-  height?: number
   measureCount?: number
   beatsPerMeasure?: number
   subdivisionsPerBeat?: number
@@ -19,7 +20,6 @@ type Props = {
 
 export default function StaffCanvas({
   width = window.innerWidth - 40,
-  height = 500,
   measureCount = 4,
   beatsPerMeasure = 4,
   subdivisionsPerBeat = 4,
@@ -45,6 +45,7 @@ export default function StaffCanvas({
   const selectedNote = useStore(s => s.selectedNote)
   const setSelectedNote = useStore(s => s.setSelectedNote)
   const transposeSelection = useStore(s => s.transposeSelection)
+  const measuresPerSystem = useStore(s => s.measuresPerSystem)
 
   // NOTE: We do NOT subscribe to volumes here to avoid re-rendering the canvas during slider drag.
   // Instead, we read current volumes from store transiently (via getState or passed refs) inside event handlers if needed.
@@ -55,71 +56,90 @@ export default function StaffCanvas({
     if (!containerRef.current) return
     containerRef.current.innerHTML = ''
 
-    const renderer = new Renderer(containerRef.current, Renderer.Backends.SVG)
-    renderer.resize(width, height)
-    const ctx = renderer.getContext()
-
-    // Calculate measure width
+    // --- Layout Constants ---
     const startX = 10
     const startY = 40
     const chordBandHeight = 30
     const totalAvailableWidth = width - 20
-    
-    // Estimate extra width for Key Signature in Measure 1
-    // Each accidental is approx 12-15px width.
+
     const keySigNotes = (currentKey && KEY_SIGNATURE_NOTES[currentKey]) ? KEY_SIGNATURE_NOTES[currentKey] : []
     const keySigCount = keySigNotes.length
-    
-    // Base 60px covers Clef + Time Sig. Add ~15px per accidental if any.
-    // If key is C (0 accidentals), extra is 60.
-    // If key is Db (5 flats), extra is 60 + (5 * 12) = 120.
     const keyScaleFactor = 12
     const keySigWidth = keySigCount * keyScaleFactor
-    
-    // We want the measures to be proportional to how much "stuff" is in them?
-    // Or do we want equitable musical space?
-    // We want equitable musical space.
-    // Total Width = (MeasureCount * MusicalWidth) + NonMusicalWidth_M1
-    // MusicalWidth = (TotalWidth - NonMusicalWidth_M1) / MeasureCount
-    
     const m1Extra = 70 + keySigWidth
-    const standardStaveWidth = Math.max(10, (totalAvailableWidth - m1Extra) / measureCount)
-    
+
+    // --- Multi-System Computation ---
+    let effectiveMPS: number
+    if (measuresPerSystem === 'auto') {
+      const availableForMusic = totalAvailableWidth - m1Extra
+      effectiveMPS = Math.max(1, Math.min(measureCount, 1 + Math.floor(availableForMusic / MIN_MEASURE_WIDTH)))
+    } else {
+      effectiveMPS = Math.max(1, Math.min(measureCount, measuresPerSystem))
+    }
+
+    const systems: { startMeasure: number; count: number }[] = []
+    for (let i = 0; i < measureCount; i += effectiveMPS) {
+      systems.push({ startMeasure: i, count: Math.min(effectiveMPS, measureCount - i) })
+    }
+
+    const systemGap = 40
+    const staveBlockHeight = chordBandHeight + 100 + 100 + (showRhythmTrack ? 100 : 0)
+    const systemHeight = staveBlockHeight + systemGap
+    const totalHeight = startY + systems.length * systemHeight + 20
+
+    const renderer = new Renderer(containerRef.current, Renderer.Backends.SVG)
+    renderer.resize(width, totalHeight)
+    const ctx = renderer.getContext()
+
     // Group references for SVG interaction layer
-    const measureLayouts: { noteStartX: number; noteWidth: number; startX: number; endX: number; tickX: number[] }[] = []
-    
+    const measureLayouts: { noteStartX: number; noteWidth: number; startX: number; endX: number; tickX: number[]; systemIndex: number; systemBaseY: number }[] = []
+
     // Track ties across measures
     let lastTrebleNote: StaveNote | null = null
     let lastBassNote: StaveNote | null = null
 
-    let currentX = startX
-    for (let m = 0; m < measureCount; m++) {
-      const staveWidth = (m === 0) ? standardStaveWidth + m1Extra : standardStaveWidth
-      const x = currentX
-      currentX += staveWidth
-      
-      // 1. Treble Stave (Melody)
-      const trebleStave = new Stave(x, startY + chordBandHeight, staveWidth)
-      if (m === 0) {
-        trebleStave.addClef('treble').addTimeSignature(`${beatsPerMeasure}/4`)
-        if (currentKey) trebleStave.addKeySignature(currentKey)
-      }
-      trebleStave.setContext(ctx).draw()
+    // ========================
+    // SYSTEM RENDERING LOOP
+    // ========================
+    for (let sys = 0; sys < systems.length; sys++) {
+      const { startMeasure, count: sysMeasureCount } = systems[sys]
+      const systemBaseY = startY + sys * systemHeight
 
-      // 2. Bass Stave
-      const bassStave = new Stave(x, startY + chordBandHeight + 100, staveWidth)
-      if (m === 0) {
-        bassStave.addClef('bass').addTimeSignature(`${beatsPerMeasure}/4`)
-        if (currentKey) bassStave.addKeySignature(currentKey)
-      }
-      bassStave.setContext(ctx).draw()
+      // Reset ties at system boundary
+      lastTrebleNote = null
+      lastBassNote = null
 
-      // 3. Rhythm Stave (Percussion)
-      let rhythmStave: Stave | null = null
-      if (showRhythmTrack) {
-          // Ensure enough space. If width/height constrained, it might be clipped.
-          rhythmStave = new Stave(x, startY + chordBandHeight + 200, staveWidth)
-          if (m === 0) rhythmStave.addClef('percussion').addTimeSignature(`${beatsPerMeasure}/4`)
+      const sysStaveWidth = Math.max(10, (totalAvailableWidth - m1Extra) / sysMeasureCount)
+
+      let currentX = startX
+      for (let localM = 0; localM < sysMeasureCount; localM++) {
+        const m = startMeasure + localM
+        const isFirstInSystem = localM === 0
+        const staveWidth = isFirstInSystem ? sysStaveWidth + m1Extra : sysStaveWidth
+        const x = currentX
+        currentX += staveWidth
+
+        // 1. Treble Stave (Melody)
+        const trebleStave = new Stave(x, systemBaseY + chordBandHeight, staveWidth)
+        if (isFirstInSystem) {
+          trebleStave.addClef('treble').addTimeSignature(`${beatsPerMeasure}/4`)
+          if (currentKey) trebleStave.addKeySignature(currentKey)
+        }
+        trebleStave.setContext(ctx).draw()
+
+        // 2. Bass Stave
+        const bassStave = new Stave(x, systemBaseY + chordBandHeight + 100, staveWidth)
+        if (isFirstInSystem) {
+          bassStave.addClef('bass').addTimeSignature(`${beatsPerMeasure}/4`)
+          if (currentKey) bassStave.addKeySignature(currentKey)
+        }
+        bassStave.setContext(ctx).draw()
+
+        // 3. Rhythm Stave (Percussion)
+        let rhythmStave: Stave | null = null
+        if (showRhythmTrack) {
+            rhythmStave = new Stave(x, systemBaseY + chordBandHeight + 200, staveWidth)
+            if (isFirstInSystem) rhythmStave.addClef('percussion').addTimeSignature(`${beatsPerMeasure}/4`)
           
           // Debug Stave drawing
           // rhythmStave.setContext(ctx).draw() 
@@ -524,42 +544,16 @@ export default function StaffCanvas({
           noteWidth,
           startX: x,
           endX: x + staveWidth,
-          tickX
+          tickX,
+          systemIndex: sys,
+          systemBaseY
       })
-    }
+      } // end inner measure loop
+    } // end system loop
 
     // Interaction Layer (Chord Band & Click Area)
     const svg = containerRef.current.querySelector('svg')
     if (svg) {
-       // Draw Chord Band Background
-       // Need to account for the actual note start X for alignment if we want it perfect,
-       // but typically the chord band spans the whole measure including clef area?
-       // The user complains about misalignment. 
-       // "Is this tied to the fact that the chord track above is not aligned with the notes to the right of the clef"
-       // Yes. The chord track should probably align with the NOTES, not the measure box.
-       // However, chords are usually valid for the whole measure.
-       // BUT, the visual "cells" in the chord track (if they existed) or the text placement might be off.
-       
-       // Actually, the user says "the rest in the first measure appear to be progressively displaced".
-       // This implies VexFlow's layout is squeezing things because of the clef, but our Grid is linear.
-       // VexFlow's formatter is NOT linear by default! It spaces based on note density.
-       // We forced it to be linear by not adding other voices? No, we used `new Formatter().joinVoices([voice]).format([voice], staveWidth)`.
-       // This format call tries to space notes "nicely", not "linearly"
-       
-       // To force linear timing (where x is proportional to time), we need to tell VexFlow.
-       // OR, simpler: We can ask VexFlow where the notes are?
-       // But we want to CLICK based on a linear grid (because the user thinks in a grid).
-       // So we should force VexFlow to be linear IF possible.
-       // Or, we render "Ghost Notes" for every 16th beat to force spacing.
-       // This is the robust way to ensure linear spacing in VexFlow.
-       
-       const bandY = startY
-       
-       // Change: Background starts at the first note of the first measure (after clef)
-       // This prevents the yellow band from covering the clef area.
-       const bgStartX = measureLayouts[0]?.noteStartX || startX
-       const bgWidth = (width - 10) - bgStartX // Right edge is approximately width - 10
-       
        // Render Permanent Chords (Always Visible)
        for (let m = 0; m < measureCount; m++) {
            const layout = measureLayouts[m]
@@ -570,13 +564,11 @@ export default function StaffCanvas({
                for (let b = 0; b < beatsPerMeasure; b++) {
                    const chord = chords[m][b]
                    const tickIndex = b * subdivisionsPerBeat
-                   // Only draw if we have a chord defined (not empty string)
-                   // The '+' placeholder will be drawn in the grid overlay instead
                    if (ticks.length > tickIndex && chord) {
                        const tx = ticks[tickIndex]
                        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
                        text.setAttribute('x', String(tx + 2))
-                       text.setAttribute('y', String(startY + chordBandHeight / 2 + 5))
+                       text.setAttribute('y', String(layout.systemBaseY + chordBandHeight / 2 + 5))
                        text.setAttribute('font-family', 'sans-serif')
                        text.setAttribute('font-size', '14')
                        text.setAttribute('fill', '#000')
@@ -824,17 +816,23 @@ export default function StaffCanvas({
 
            const totalSubdivisions = beatsPerMeasure * subdivisionsPerBeat
 
-               // Draw Yellow Chord Band in Grid Layer (Visible on Hover)
-               const bgStartX = measureLayouts[0]?.noteStartX || startX
-               const bgWidth = (width - 10) - bgStartX
-               const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-               bg.setAttribute('x', String(bgStartX))
-               bg.setAttribute('y', String(startY))
-               bg.setAttribute('width', String(Math.max(0, bgWidth)))
-               bg.setAttribute('height', String(chordBandHeight))
-               bg.setAttribute('fill', '#fff8e1')
-               bg.setAttribute('style', 'pointer-events: none;')
-               gridGroup.appendChild(bg)
+               // Draw Yellow Chord Band per system (Visible on Hover)
+               for (let sys = 0; sys < systems.length; sys++) {
+                   const sysBaseY = startY + sys * systemHeight
+                   const firstM = systems[sys].startMeasure
+                   const bgStartX = measureLayouts[firstM]?.noteStartX || startX
+                   const lastM = firstM + systems[sys].count - 1
+                   const bgEndX = measureLayouts[lastM]?.endX || (width - 10)
+                   const bgWidth = bgEndX - bgStartX
+                   const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+                   bg.setAttribute('x', String(bgStartX))
+                   bg.setAttribute('y', String(sysBaseY))
+                   bg.setAttribute('width', String(Math.max(0, bgWidth)))
+                   bg.setAttribute('height', String(chordBandHeight))
+                   bg.setAttribute('fill', '#fff8e1')
+                   bg.setAttribute('style', 'pointer-events: none;')
+                   gridGroup.appendChild(bg)
+               }
 
                // Render Sync Toggle Button (To the left of the chord track)
                // Chord track starts at bgStartX.
@@ -908,25 +906,16 @@ export default function StaffCanvas({
 
                    // Highlight Selected Note
                    if (selectedNote && selectedNote.m === m) {
-                       // Calculate position for selection highlight
-                       // We need the tick index
                        const totalTick = (selectedNote.b * subdivisionsPerBeat) + selectedNote.s
                        if (layout.tickX && layout.tickX[totalTick] !== undefined) {
                            const selX = layout.tickX[totalTick]
-                           // Width of one tick slot
                            const nextX = layout.tickX[totalTick + 1] || (layout.noteStartX + layout.noteWidth)
                            const width = (nextX - selX)
                            
-                           // Determine Y based on staff
-                           const selY = selectedNote.staff === 'treble' 
-                               ? startY + chordBandHeight + 40 // approximate middle of treble
-                               : startY + chordBandHeight + 140 // approximate middle of bass 
+                           const staffTop = selectedNote.staff === 'treble' ? layout.systemBaseY + chordBandHeight : layout.systemBaseY + chordBandHeight + 100
                            
-                           // Draw selection box
                            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-                           rect.setAttribute('x', String(selX - 2)) // buffer
-                           // Full height of stave area?
-                           const staffTop = selectedNote.staff === 'treble' ? startY + chordBandHeight : startY + chordBandHeight + 100
+                           rect.setAttribute('x', String(selX - 2))
                            rect.setAttribute('y', String(staffTop))
                            rect.setAttribute('width', String(width + 4))
                            rect.setAttribute('height', '100')
@@ -938,14 +927,15 @@ export default function StaffCanvas({
 
                    // Vertical lines for each subdivision based on VexFlow Tick Alignment
                const ticks = layout.tickX || []
+               const lineBottomY = layout.systemBaseY + staveBlockHeight
                
                // Draw lines for each tick
                ticks.forEach((tx, t) => {
                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
                    line.setAttribute('x1', String(tx))
                    line.setAttribute('x2', String(tx))
-                   line.setAttribute('y1', String(startY)) // From top of staff area (including chords)
-                   line.setAttribute('y2', String(height - 10)) // full height
+                   line.setAttribute('y1', String(layout.systemBaseY))
+                   line.setAttribute('y2', String(lineBottomY))
                    
                    // Style based on beat vs subdivision
                    const isBeat = t % subdivisionsPerBeat === 0
@@ -955,13 +945,12 @@ export default function StaffCanvas({
                })
 
                // Re-added Double Line Feature:
-               // Draw end line for measure (visual guide) which creates the double-line effect
                const endX = layout.noteStartX + layout.noteWidth
                const endLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
                endLine.setAttribute('x1', String(endX))
                endLine.setAttribute('x2', String(endX))
-               endLine.setAttribute('y1', String(startY))
-               endLine.setAttribute('y2', String(height - 10))
+               endLine.setAttribute('y1', String(layout.systemBaseY))
+               endLine.setAttribute('y2', String(lineBottomY))
                endLine.setAttribute('stroke', '#bbb') 
                gridGroup.appendChild(endLine)
 
@@ -971,12 +960,10 @@ export default function StaffCanvas({
                        const chord = chords[m][b]
                        const tickIndex = b * subdivisionsPerBeat
                        if (ticks.length > tickIndex) {
-                           // Always redraw chord in the overlay to ensure it sits ON TOP of the yellow bad
-                           // OR draw '+' if empty
                            const tx = ticks[tickIndex]
                            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
                            text.setAttribute('x', String(tx + 2))
-                           text.setAttribute('y', String(startY + chordBandHeight / 2 + 5))
+                           text.setAttribute('y', String(layout.systemBaseY + chordBandHeight / 2 + 5))
                            text.setAttribute('font-family', 'sans-serif')
                            
                            if (chord) {
@@ -1017,26 +1004,32 @@ export default function StaffCanvas({
            const x = e.clientX - rect.left
            const y = e.clientY - rect.top
            
-           // Determine measure based on Layouts
+           // Determine measure based on Layouts (check both X and Y for multi-system)
            let m = -1
            let ticks: number[] = []
            for(let i=0; i<measureLayouts.length; i++) {
-               // Hit test the whole measure width, not just note width, to catch clicks in margins
-               if (x >= measureLayouts[i].startX && x < measureLayouts[i].endX) {
+               const layout = measureLayouts[i]
+               if (!layout) continue
+               if (x >= layout.startX && x < layout.endX &&
+                   y >= layout.systemBaseY && y < layout.systemBaseY + staveBlockHeight) {
                    m = i
-                   ticks = measureLayouts[i].tickX || []
+                   ticks = layout.tickX || []
                    break
                }
            }
 
            if (m === -1) return
 
-           // Clef click regions (only on first measure, left of noteStartX)
-           const trebleY = startY + chordBandHeight
-           const bassY = startY + chordBandHeight + 100
-           const clefRightX = measureLayouts[0]?.noteStartX ?? (startX + 40)
+           const mLayout = measureLayouts[m]
+           const trebleY = mLayout.systemBaseY + chordBandHeight
+           const bassY = mLayout.systemBaseY + chordBandHeight + 100
 
-           if (m === 0 && x >= startX && x < clefRightX) {
+           // Clef click regions (only on first measure of each system, left of noteStartX)
+           const mSys = mLayout.systemIndex
+           const isFirstInSystem = m === systems[mSys].startMeasure
+           const clefRightX = mLayout.noteStartX
+
+           if (isFirstInSystem && x >= startX && x < clefRightX) {
                if (y >= trebleY - 20 && y <= trebleY + 60 && onTrebleClefClick) {
                    onTrebleClefClick(e.clientX, e.clientY)
                    return
@@ -1065,9 +1058,9 @@ export default function StaffCanvas({
                let targetTrack: 'melody' | 'bass' | 'chord' | 'rhythm' | null = null
                
                // Determine track based on Y proximity
-               const rhythmY = startY + chordBandHeight + 200
+               const rhythmY = mLayout.systemBaseY + chordBandHeight + 200
 
-               if (y >= startY && y < startY + chordBandHeight) {
+               if (y >= mLayout.systemBaseY && y < mLayout.systemBaseY + chordBandHeight) {
                    targetTrack = 'chord'
                } else if (y >= trebleY - 50 && y < trebleY + 120) {
                    targetTrack = 'melody'
@@ -1252,7 +1245,7 @@ export default function StaffCanvas({
     }
 
   }, [
-    width, height, measureCount, beatsPerMeasure, subdivisionsPerBeat, 
+    width, measureCount, beatsPerMeasure, subdivisionsPerBeat, measuresPerSystem,
     melody, bass, rhythmTrack, showRhythmTrack,
         onChordClick, onTrebleClefClick, onBassClefClick,
         setMelodyNote, setBassNote, selectedDuration, setMelodyNoteAndClear, setBassNoteAndClear, selectedNote,

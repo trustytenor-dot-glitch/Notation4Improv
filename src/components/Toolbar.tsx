@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import useStore from '../state/store'
 import SaveLoadModal from './SaveLoadModal'
 
-export default function Toolbar() {
+export default function Toolbar({ onPrint }: { onPrint?: () => void }) {
   const [modalMode, setModalMode] = useState<'save' | 'load' | null>(null)
   const bpm = useStore(s => s.bpm)
   const key = useStore(s => s.key)
@@ -16,6 +16,8 @@ export default function Toolbar() {
   const setMeasureCount = useStore(s => s.setMeasureCount)
   const setBeatsPerMeasure = useStore(s => s.setBeatsPerMeasure)
   const setSubdivisionsPerBeat = useStore(s => s.setSubdivisionsPerBeat)
+  const measuresPerSystem = useStore(s => s.measuresPerSystem)
+  const setMeasuresPerSystem = useStore(s => s.setMeasuresPerSystem)
   const reset = useStore(s => s.reset)
   // const revert = useStore(s => s.revert) // Use load modal instead
   const undo = useStore(s => s.undo)
@@ -60,7 +62,7 @@ export default function Toolbar() {
 
       <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         Measures:
-        <input type="number" min={1} max={16} value={measureCount} onChange={e => setMeasureCount(Number(e.target.value)||1)} style={{width:64}} />
+        <input type="number" min={1} max={32} value={measureCount} onChange={e => setMeasureCount(Number(e.target.value)||1)} style={{width:64}} />
       </label>
 
       <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -77,12 +79,24 @@ export default function Toolbar() {
         </select>
       </label>
 
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        Per Line:
+        <select value={String(measuresPerSystem)} onChange={e => {
+          const v = e.target.value
+          setMeasuresPerSystem(v === 'auto' ? 'auto' : Number(v))
+        }}>
+          <option value="auto">Auto</option>
+          {[1,2,3,4,5,6,7,8].map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </label>
+
       <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           <button onClick={play}>Play</button>
           <button onClick={stop}>Stop</button>
           <button onClick={undo}>Undo</button>
           <button onClick={redo}>Redo</button>
           <button onClick={reset}>Reset</button>
+          {onPrint && <button onClick={onPrint}>Print</button>}
           <button onClick={() => setModalMode('save')}>Save</button>
           <button onClick={() => setModalMode('load')}>Revert</button>
       </div>
